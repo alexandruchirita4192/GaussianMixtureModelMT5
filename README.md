@@ -6,6 +6,9 @@ Gaussian Mixture Model (unsupervised clustering)
 - Detects market regimes
 - Maps clusters to BUY / SELL / FLAT
 
+## Disclaimer
+### Gaussian Mixture Model detects market regimes, not good for trading because it doesn't give many trade signals. XAGUSD got a profitable trade and BTCUSD a negative trade, but it can be luck when it works, there's no batch of trades to ensure this works on a well-tested period.
+
 ## Run training
 
 ```text
