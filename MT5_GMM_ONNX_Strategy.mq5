@@ -4,13 +4,17 @@
 #property strict
 
 #include <Trade/Trade.mqh>
+#include <Math\Alglib\alglib.mqh>
+
 CTrade trade;
 
+#resource "gmm.onnx" as uchar GMMModel[]
+
 // === INPUTS ===
-input string InpModelFile = "gmm.onnx";
 input double InpLot = 0.1;
 input double InpThreshold = 0.60;
 input int InpMagic = 123456;
+input bool InpLog = false;
 
 // mapping cluster -> action
 // IMPORTANT: trebuie sa fie identic cu mapping.json
@@ -19,24 +23,66 @@ input int Cluster1 = -1;  // SELL
 input int Cluster2 = 0;   // FLAT
 
 // === ONNX ===
-int onnx_handle = INVALID_HANDLE;
+long onnx_handle = INVALID_HANDLE;
 
 // === FEATURE BUFFER ===
-float features[10];
+double features[10];
+#include <Math\Alglib\alglib.mqh>
 
-// === INIT ===
+// sau direct vectorf / matrixf dacă nu ai nevoie de alglib
+
+// GLOBAL
+vectorf input_data;
+vectorf output_data;
+const long input_shape[] = {1,10};
+const long output_shape[] = {1,3};
+
+
+// INIT
 int OnInit()
 {
-   onnx_handle = OnnxCreate(InpModelFile);
+   if (InpLog)
+   {
+      Print("=== INIT START ===");   
+   }
+   
+   onnx_handle = OnnxCreateFromBuffer(GMMModel, ONNX_DEFAULT);
+
    if(onnx_handle == INVALID_HANDLE)
    {
-      Print("Failed to load ONNX model");
-      return(INIT_FAILED);
+      if (InpLog)
+      {
+         Print("ONNX load failed from buffer");
+         Print("Error: ", GetLastError());
+      }
+      return INIT_FAILED;
    }
 
-   Print("GMM ONNX loaded");
-   return(INIT_SUCCEEDED);
+
+   if (InpLog)
+      Print("ONNX LOAD OK");
+   
+   OnnxSetInputShape(onnx_handle, 0, input_shape);
+   
+   if (InpLog)
+      Print("ONNX OnnxSetInputShape OK");
+   
+   OnnxSetOutputShape(onnx_handle, 0, output_shape);
+   
+   if (InpLog)
+      Print("ONNX OnnxSetOutputShape OK");
+   
+   input_data.Resize(10);     // 10 features
+   if (InpLog)
+      Print("Input resize OK");
+      
+   output_data.Resize(3);     // 3 clusters
+   if (InpLog)
+      Print("Output resize OK");
+
+   return INIT_SUCCEEDED;
 }
+
 
 // === DEINIT ===
 void OnDeinit(const int reason)
@@ -46,7 +92,7 @@ void OnDeinit(const int reason)
 }
 
 // === FEATURE ENGINEERING ===
-void BuildFeatures(float &out[])
+void BuildFeatures(double &out[])
 {
    int shift = 0;
 
@@ -115,24 +161,25 @@ int MapCluster(int cluster)
 }
 
 // === ONNX PREDICT ===
-int Predict(float &confidence)
+int Predict(double &confidence)
 {
-   float output[3];
+   for(int i=0;i<10;i++)
+      input_data[i] = (float)features[i];
 
-   if(!OnnxRun(onnx_handle, features, output))
+   if(!OnnxRun(onnx_handle, ONNX_NO_CONVERSION, input_data, output_data))
    {
-      Print("ONNX run failed");
+      Print("ONNX run failed ", GetLastError());
       return 0;
    }
 
    int best = 0;
-   float maxv = output[0];
+   double maxv = output_data[0];
 
    for(int i=1;i<3;i++)
    {
-      if(output[i] > maxv)
+      if(output_data[i] > maxv)
       {
-         maxv = output[i];
+         maxv = output_data[i];
          best = i;
       }
    }
@@ -157,6 +204,15 @@ void ExecuteTrade(int signal)
 // === MAIN LOOP ===
 void OnTick()
 {
+   int bars = Bars(_Symbol, PERIOD_M15);
+   
+   if(bars < 50)
+   {
+      if(InpLog)
+         Print("Not enough bars: ", bars);
+      return;
+   }
+   
    static datetime last_bar = 0;
 
    datetime current_bar = iTime(_Symbol, PERIOD_M15, 0);
@@ -167,7 +223,7 @@ void OnTick()
 
    BuildFeatures(features);
 
-   float conf;
+   double conf;
    int cluster = Predict(conf);
 
    if(conf < InpThreshold)
@@ -178,7 +234,8 @@ void OnTick()
    if(signal != 0)
       ExecuteTrade(signal);
 
-   Print("Cluster=", cluster, " Confidence=", conf, " Signal=", signal);
+   if (InpLog)
+      Print("Cluster=", cluster, " Confidence=", conf, " Signal=", signal);
 }
 
 double OnTester()
